@@ -30,6 +30,7 @@ app.get('/webhook', (req, res) => {
 // 2. Réception des événements (POST)
 app.post('/webhook', async (req, res) => {
   const body = req.body;
+  console.log("Webhook POST reçu :", JSON.stringify(body, null, 2));
 
   if (body.object === 'page') {
     body.entry.forEach(async (entry) => {
