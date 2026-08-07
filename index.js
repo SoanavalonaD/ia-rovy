@@ -27,32 +27,66 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// 2. Réception des événements Messenger (POST)
+// 2. Réception des événements (POST)
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
   if (body.object === 'page') {
     body.entry.forEach(async (entry) => {
-      const webhook_event = entry.messaging[0];
-      if (webhook_event && webhook_event.message && webhook_event.message.text) {
-        const senderPsid = webhook_event.sender.id;
-        const userMessage = webhook_event.message.text;
+      
+      // ----------------------------------------------------
+      // CAS 1 : Traitement des commentaires sur les POSTS (feed)
+      // ----------------------------------------------------
+      if (entry.changes) {
+        entry.changes.forEach(async (change) => {
+          if (change.field === 'feed' && change.value.item === 'comment' && change.value.verb === 'add') {
+            const commentId = change.value.comment_id;
+            const commentText = change.value.message;
+            const userPsid = change.value.from.id;
 
-        console.log(`Message reçu de ${senderPsid} : ${userMessage}`);
+            console.log(`Nouveau commentaire [${commentId}] : ${commentText}`);
 
-        // Appeler le modèle IA Gemini pour analyser le message
-        const analysis = await analyzeHateSpeech(userMessage);
-        console.log(`Analyse Gemini pour "${userMessage}" :`, analysis);
+            // Analyse IA
+            const analysis = await analyzeHateSpeech(commentText);
+            console.log(`Analyse Gemini pour le commentaire "${commentText}" :`, analysis);
 
-        if (analysis.isHate) {
-          const responseText = `⚠️ **Avertissement IA'ROVY**\n\nVotre message contient des propos déplacés ou haineux.\n\n💡 **Proposition de reformulation bienveillante :**\n"${analysis.suggestion}"`;
-          await sendTextMessage(senderPsid, responseText);
-        } else {
-          // Si le message est correct, répondre avec le message conversationnel généré par l'IA
-          const replyText = analysis.reply || `Merci pour votre message ! L'assistant IA'ROVY est actif.`;
-          await sendTextMessage(senderPsid, replyText);
+            if (analysis.isHate) {
+              // 1. Masquer le commentaire haineux sur Facebook
+              await hideFacebookComment(commentId);
+
+              // 2. Répondre sous le commentaire ou envoyer un avertissement privé
+              console.log(`Commentaire haineux masqué : ${commentId}. Reformulation : ${analysis.suggestion}`);
+            }
+          }
+        });
+      }
+
+      // ----------------------------------------------------
+      // CAS 2 : Traitement des messages privés (Messenger)
+      // ----------------------------------------------------
+      if (entry.messaging) {
+        const webhook_event = entry.messaging[0];
+        if (webhook_event && webhook_event.message && webhook_event.message.text) {
+          const senderPsid = webhook_event.sender.id;
+          const userMessage = webhook_event.message.text;
+
+          console.log(`Message reçu de ${senderPsid} : ${userMessage}`);
+
+          // Appeler le modèle IA Gemini pour analyser le message
+          const analysis = await analyzeHateSpeech(userMessage);
+          console.log(`Analyse Gemini pour le message "${userMessage}" :`, analysis);
+
+          if (analysis.isHate) {
+            const responseText = `⚠️ **Avertissement IA'ROVY**\n\nVotre message contient des propos déplacés ou haineux.\n\n💡 **Proposition de reformulation bienveillante :**\n"${analysis.suggestion}"`;
+            await sendTextMessage(senderPsid, responseText);
+          } else {
+            // Si le message est correct, répondre avec le message conversationnel généré par l'IA
+            const replyText = analysis.reply || `Merci pour votre message ! L'assistant IA'ROVY est actif.`;
+            await sendTextMessage(senderPsid, replyText);
+          }
         }
       }
+
     });
     res.status(200).send('EVENT_RECEIVED');
   } else {
@@ -76,7 +110,7 @@ Consignes :
 3. Si le texte n'est pas haineux (isHate = false), laisse le champ "suggestion" vide (""), et génère une réponse chaleureuse, naturelle et fluide dans la même langue que l'utilisateur dans le champ "reply".`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.5-flash', // <-- UTILISEZ CE NOM EXACT
+      model: 'gemini-3.5-flash', 
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -113,6 +147,19 @@ async function sendTextMessage(senderPsid, text) {
     console.log(`Message envoyé à ${senderPsid} : ${text}`);
   } catch (error) {
     console.error('Erreur d envoi Messenger :', error.response ? error.response.data : error.message);
+  }
+}
+
+// Fonction pour MASQUER un commentaire haineux via Meta Graph API
+async function hideFacebookComment(commentId) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${commentId}?access_token=${PAGE_ACCESS_TOKEN}`,
+      { is_hidden: true }
+    );
+    console.log(`Le commentaire ${commentId} a été masqué publiquement.`);
+  } catch (error) {
+    console.error('Erreur lors du masquage du commentaire :', error.response ? error.response.data : error.message);
   }
 }
 
