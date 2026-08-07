@@ -42,13 +42,15 @@ app.post('/webhook', async (req, res) => {
 
         // Appeler le modèle IA Gemini pour analyser le message
         const analysis = await analyzeHateSpeech(userMessage);
+        console.log(`Analyse Gemini pour "${userMessage}" :`, analysis);
 
         if (analysis.isHate) {
           const responseText = `⚠️ **Avertissement IA'ROVY**\n\nVotre message contient des propos déplacés ou haineux.\n\n💡 **Proposition de reformulation bienveillante :**\n"${analysis.suggestion}"`;
           await sendTextMessage(senderPsid, responseText);
         } else {
-          // Si le message est correct, répondre normalement ou laisser passer
-          await sendTextMessage(senderPsid, `Merci pour votre message ! L'assistant IA'ROVY est actif.`);
+          // Si le message est correct, répondre avec le message conversationnel généré par l'IA
+          const replyText = analysis.reply || `Merci pour votre message ! L'assistant IA'ROVY est actif.`;
+          await sendTextMessage(senderPsid, replyText);
         }
       }
     });
@@ -63,25 +65,30 @@ app.post('/webhook', async (req, res) => {
  */
 async function analyzeHateSpeech(text) {
   try {
-    const prompt = `Tu es un modérateur expert pour le projet IA'ROVY à Madagascar.
+    const prompt = `Tu es un modérateur expert et assistant conversationnel bienveillant pour le projet IA'ROVY à Madagascar.
 Analyse le texte suivant qui peut être rédigé en Français, en Malgache ou en Frangasy.
 
 Texte à analyser : "${text}"
 
 Consignes :
 1. Détermine si le texte contient du discours haineux, des insultes, du harcèlement ou de la discrimination.
-2. Si le texte est haineux, propose une reformulation respectueuse et pédagogique.
-3. Réponds UNIQUEMENT sous forme de JSON strict :
-{
-  "isHate": true ou false,
-  "suggestion": "votre reformulation ici (ou chaine vide si isHate est false)"
-}`;
+2. Si le texte est haineux (isHate = true), propose une reformulation respectueuse et pédagogique dans le champ "suggestion", et laisse le champ "reply" vide ("").
+3. Si le texte n'est pas haineux (isHate = false), laisse le champ "suggestion" vide (""), et génère une réponse chaleureuse, naturelle et fluide dans la même langue que l'utilisateur dans le champ "reply".`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash', // <-- UTILISEZ CE NOM EXACT
+      model: 'gemini-3.5-flash', // <-- UTILISEZ CE NOM EXACT
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'OBJECT',
+          properties: {
+            isHate: { type: 'BOOLEAN' },
+            suggestion: { type: 'STRING' },
+            reply: { type: 'STRING' }
+          },
+          required: ['isHate', 'suggestion', 'reply']
+        }
       },
     });
 
@@ -89,7 +96,7 @@ Consignes :
     return JSON.parse(resultText);
   } catch (error) {
     console.error("Erreur lors de l'appel Gemini :", error);
-    return { isHate: false, suggestion: '' };
+    return { isHate: false, suggestion: '', reply: '' };
   }
 }
 
@@ -103,6 +110,7 @@ async function sendTextMessage(senderPsid, text) {
         message: { text: text }
       }
     );
+    console.log(`Message envoyé à ${senderPsid} : ${text}`);
   } catch (error) {
     console.error('Erreur d envoi Messenger :', error.response ? error.response.data : error.message);
   }
