@@ -31,6 +31,10 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
+  // LOGS OBLIGATOIRES POUR LE DÉBOGAGE GLOBAL
+  console.log("=== ÉVÉNEMENT WEBHOOK REÇU ===");
+  console.log(JSON.stringify(body, null, 2));
+
   if (body.object === 'page') {
     body.entry.forEach(async (entry) => {
       
@@ -42,9 +46,12 @@ app.post('/webhook', async (req, res) => {
           if (change.field === 'feed' && change.value.item === 'comment' && change.value.verb === 'add') {
             const commentId = change.value.comment_id;
             const commentText = change.value.message;
-            const userPsid = change.value.from.id;
+            const userPsid = change.value.from ? change.value.from.id : 'Inconnu';
 
-            console.log(`Nouveau commentaire [${commentId}] : ${commentText}`);
+            // Sécurité si le commentaire est un sticker/image sans texte
+            if (!commentText) return; 
+
+            console.log(`Nouveau commentaire [${commentId}] de ${userPsid} : ${commentText}`);
 
             // Analyse IA
             const analysis = await analyzeHateSpeech(commentText);
@@ -53,8 +60,6 @@ app.post('/webhook', async (req, res) => {
             if (analysis.isHate) {
               // 1. Masquer le commentaire haineux sur Facebook
               await hideFacebookComment(commentId);
-
-              // 2. Répondre sous le commentaire ou envoyer un avertissement privé
               console.log(`Commentaire haineux masqué : ${commentId}. Reformulation : ${analysis.suggestion}`);
             }
           }
@@ -65,26 +70,27 @@ app.post('/webhook', async (req, res) => {
       // CAS 2 : Traitement des messages privés (Messenger)
       // ----------------------------------------------------
       if (entry.messaging) {
-        const webhook_event = entry.messaging[0];
-        if (webhook_event && webhook_event.message && webhook_event.message.text) {
-          const senderPsid = webhook_event.sender.id;
-          const userMessage = webhook_event.message.text;
+        entry.messaging.forEach(async (webhook_event) => {
+          if (webhook_event.message && webhook_event.message.text) {
+            const senderPsid = webhook_event.sender.id;
+            const userMessage = webhook_event.message.text;
 
-          console.log(`Message reçu de ${senderPsid} : ${userMessage}`);
+            console.log(`Message reçu de ${senderPsid} : ${userMessage}`);
 
-          // Appeler le modèle IA Gemini pour analyser le message
-          const analysis = await analyzeHateSpeech(userMessage);
-          console.log(`Analyse Gemini pour le message "${userMessage}" :`, analysis);
+            // Appeler le modèle IA Gemini pour analyser le message
+            const analysis = await analyzeHateSpeech(userMessage);
+            console.log(`Analyse Gemini pour le message "${userMessage}" :`, analysis);
 
-          if (analysis.isHate) {
-            const responseText = `⚠️ **Avertissement IA'ROVY**\n\nVotre message contient des propos déplacés ou haineux.\n\n💡 **Proposition de reformulation bienveillante :**\n"${analysis.suggestion}"`;
-            await sendTextMessage(senderPsid, responseText);
-          } else {
-            // Si le message est correct, répondre avec le message conversationnel généré par l'IA
-            const replyText = analysis.reply || `Merci pour votre message ! L'assistant IA'ROVY est actif.`;
-            await sendTextMessage(senderPsid, replyText);
+            if (analysis.isHate) {
+              const responseText = `⚠️ **Avertissement IA'ROVY**\n\nVotre message contient des propos déplacés ou haineux.\n\n💡 **Proposition de reformulation bienveillante :**\n"${analysis.suggestion}"`;
+              await sendTextMessage(senderPsid, responseText);
+            } else {
+              // Si le message est correct, répondre avec le message conversationnel généré par l'IA
+              const replyText = analysis.reply || `Merci pour votre message ! L'assistant IA'ROVY est actif.`;
+              await sendTextMessage(senderPsid, replyText);
+            }
           }
-        }
+        });
       }
 
     });
@@ -95,7 +101,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 /**
- * Fonction d'analyse du discours haineux via Gemini 2.5 Flash
+ * Fonction d'analyse du discours haineux via Gemini
  */
 async function analyzeHateSpeech(text) {
   try {
@@ -144,7 +150,7 @@ async function sendTextMessage(senderPsid, text) {
         message: { text: text }
       }
     );
-    console.log(`Message envoyé à ${senderPsid} : ${text}`);
+    console.log(`Message envoyé à ${senderPsid}`);
   } catch (error) {
     console.error('Erreur d envoi Messenger :', error.response ? error.response.data : error.message);
   }
